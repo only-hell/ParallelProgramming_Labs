@@ -1,10 +1,10 @@
-﻿*.exe
+﻿.vs/
+.idea/
+.venv/
+x64/
+*.exe
 *.obj
 *.pdb
-.vs/
-x64/
 *.sln
-*.vcxproj
+*.vcxproj*
 *.user
-*.filters
-*.txt

@@ -1,35 +1,30 @@
 ﻿#include <iostream>
 #include <fstream>
 #include <vector>
-#include <chrono>
+#include <omp.h> // Библиотека OpenMP
 #include <clocale>
+#include <iomanip> // Для красивого вывода
 
 using namespace std;
 
-// Функция для чтения матрицы из файла
+// Функция для чтения матрицы
 bool readMatrix(const string& filename, vector<double>& matrix, int& n) {
     ifstream file(filename);
     if (!file.is_open()) return false;
-
-    file >> n; // Читаем первую строку - размерность
+    file >> n;
     matrix.resize(n * n);
-    for (int i = 0; i < n * n; ++i) {
-        file >> matrix[i];
-    }
+    for (int i = 0; i < n * n; ++i) file >> matrix[i];
     file.close();
     return true;
 }
 
-// Функция для записи матрицы в файл
+// Функция для записи матрицы
 bool writeMatrix(const string& filename, const vector<double>& matrix, int n) {
     ofstream file(filename);
     if (!file.is_open()) return false;
-
-    file << n << "\n"; // Пишем размерность в первую строку
+    file << n << "\n";
     for (int i = 0; i < n; ++i) {
-        for (int j = 0; j < n; ++j) {
-            file << matrix[i * n + j] << " ";
-        }
+        for (int j = 0; j < n; ++j) file << matrix[i * n + j] << " ";
         file << "\n";
     }
     file.close();
@@ -43,46 +38,62 @@ int main() {
 
     cout << "Чтение матриц A.txt и B.txt..." << endl;
     if (!readMatrix("A.txt", A, nA) || !readMatrix("B.txt", B, nB)) {
-        cerr << "Ошибка чтения! Сначала сгенерируйте матрицы скриптом Python." << endl;
+        cerr << "Ошибка: Сначала сгенерируйте матрицы скриптом Python." << endl;
         return 1;
     }
 
     if (nA != nB) {
-        cerr << "Размеры матриц не совпадают!" << endl;
+        cerr << "Ошибка: Размеры матриц не совпадают!" << endl;
         return 1;
     }
     int N = nA;
-    C.assign(N * N, 0.0); // Инициализируем матрицу C нулями
+    C.assign(N * N, 0.0);
 
-    cout << "Умножение матриц размером " << N << "x" << N << "..." << endl;
+    cout << "\nУмножение матриц размером " << N << "x" << N << endl;
+    cout << "--------------------------------------------------------" << endl;
+    cout << "Потоки\t| Время (сек)\t| Ускорение\t| Эффективность" << endl;
+    cout << "--------------------------------------------------------" << endl;
 
-    // Старт замера времени
-    auto start = chrono::high_resolution_clock::now();
+    vector<int> thread_counts = { 1, 2, 4, 8 };
+    double time_1_thread = 0.0;
 
-    // Классический алгоритм перемножения (сложность O(N^3))
-    for (int i = 0; i < N; ++i) {
-        for (int j = 0; j < N; ++j) {
-            double sum = 0.0;
-            for (int k = 0; k < N; ++k) {
-                sum += A[i * N + k] * B[k * N + j];
+    // Автоматический прогон для разного числа потоков
+    for (int threads : thread_counts) {
+        omp_set_num_threads(threads);
+        fill(C.begin(), C.end(), 0.0); // Сбрасываем матрицу C перед каждым тестом
+
+        double start_time = omp_get_wtime(); // Таймер OpenMP
+
+        // --- ПАРАЛЛЕЛЬНАЯ ОБЛАСТЬ ---
+#pragma omp parallel for shared(A, B, C)
+        for (int i = 0; i < N; ++i) {
+            for (int j = 0; j < N; ++j) {
+                double sum = 0.0;
+                for (int k = 0; k < N; ++k) {
+                    sum += A[i * N + k] * B[k * N + j];
+                }
+                C[i * N + j] = sum;
             }
-            C[i * N + j] = sum;
         }
+        // ----------------------------
+
+        double end_time = omp_get_wtime();
+        double current_time = end_time - start_time;
+
+        if (threads == 1) time_1_thread = current_time;
+
+        double speedup = time_1_thread / current_time;
+        double efficiency = (speedup / threads) * 100.0;
+
+        cout << threads << "\t| "
+            << fixed << setprecision(4) << current_time << " сек\t| "
+            << setprecision(2) << speedup << "x\t\t| "
+            << setprecision(1) << efficiency << " %" << endl;
     }
+    cout << "--------------------------------------------------------" << endl;
 
-    // Конец замера времени
-    auto end = chrono::high_resolution_clock::now();
-    chrono::duration<double> duration = end - start;
+    cout << "Запись результата 8-поточного вычисления в C.txt..." << endl;
+    writeMatrix("C.txt", C, N);
 
-    cout << "Время выполнения: " << duration.count() << " секунд." << endl;
-    cout << "Объем задачи: приблизительно " << 2.0 * N * N * N << " операций." << endl;
-
-    cout << "Запись результата в C.txt..." << endl;
-    if (!writeMatrix("C.txt", C, N)) {
-        cerr << "Ошибка записи файла C.txt!" << endl;
-        return 1;
-    }
-
-    cout << "Успешно завершено." << endl;
     return 0;
 }
