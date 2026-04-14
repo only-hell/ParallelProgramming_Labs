@@ -1,24 +1,19 @@
 ﻿#include <iostream>
 #include <fstream>
 #include <vector>
-#include <omp.h> // Библиотека OpenMP
-#include <clocale>
-#include <iomanip> // Для красивого вывода
+#include <mpi.h>
 
 using namespace std;
 
-// Функция для чтения матрицы
 bool readMatrix(const string& filename, vector<double>& matrix, int& n) {
     ifstream file(filename);
     if (!file.is_open()) return false;
     file >> n;
     matrix.resize(n * n);
     for (int i = 0; i < n * n; ++i) file >> matrix[i];
-    file.close();
     return true;
 }
 
-// Функция для записи матрицы
 bool writeMatrix(const string& filename, const vector<double>& matrix, int n) {
     ofstream file(filename);
     if (!file.is_open()) return false;
@@ -27,73 +22,69 @@ bool writeMatrix(const string& filename, const vector<double>& matrix, int n) {
         for (int j = 0; j < n; ++j) file << matrix[i * n + j] << " ";
         file << "\n";
     }
-    file.close();
     return true;
 }
 
-int main() {
-    setlocale(LC_ALL, "Russian");
-    int nA, nB;
+int main(int argc, char* argv[]) {
+    MPI_Init(&argc, &argv);
+
+    int rank, size;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &size);
+
+    int N = 0;
     vector<double> A, B, C;
 
-    cout << "Чтение матриц A.txt и B.txt..." << endl;
-    if (!readMatrix("A.txt", A, nA) || !readMatrix("B.txt", B, nB)) {
-        cerr << "Ошибка: Сначала сгенерируйте матрицы скриптом Python." << endl;
-        return 1;
-    }
-
-    if (nA != nB) {
-        cerr << "Ошибка: Размеры матриц не совпадают!" << endl;
-        return 1;
-    }
-    int N = nA;
-    C.assign(N * N, 0.0);
-
-    cout << "\nУмножение матриц размером " << N << "x" << N << endl;
-    cout << "--------------------------------------------------------" << endl;
-    cout << "Потоки\t| Время (сек)\t| Ускорение\t| Эффективность" << endl;
-    cout << "--------------------------------------------------------" << endl;
-
-    vector<int> thread_counts = { 1, 2, 4, 8 };
-    double time_1_thread = 0.0;
-
-    // Автоматический прогон для разного числа потоков
-    for (int threads : thread_counts) {
-        omp_set_num_threads(threads);
-        fill(C.begin(), C.end(), 0.0); // Сбрасываем матрицу C перед каждым тестом
-
-        double start_time = omp_get_wtime(); // Таймер OpenMP
-
-        // --- ПАРАЛЛЕЛЬНАЯ ОБЛАСТЬ ---
-#pragma omp parallel for shared(A, B, C)
-        for (int i = 0; i < N; ++i) {
-            for (int j = 0; j < N; ++j) {
-                double sum = 0.0;
-                for (int k = 0; k < N; ++k) {
-                    sum += A[i * N + k] * B[k * N + j];
-                }
-                C[i * N + j] = sum;
-            }
+    if (rank == 0) {
+        int nB;
+        if (!readMatrix("A.txt", A, N) || !readMatrix("B.txt", B, nB) || N != nB) {
+            cerr << "Error: Could not read matrices A.txt and B.txt properly." << endl;
+            MPI_Abort(MPI_COMM_WORLD, 1);
         }
-        // ----------------------------
-
-        double end_time = omp_get_wtime();
-        double current_time = end_time - start_time;
-
-        if (threads == 1) time_1_thread = current_time;
-
-        double speedup = time_1_thread / current_time;
-        double efficiency = (speedup / threads) * 100.0;
-
-        cout << threads << "\t| "
-            << fixed << setprecision(4) << current_time << " сек\t| "
-            << setprecision(2) << speedup << "x\t\t| "
-            << setprecision(1) << efficiency << " %" << endl;
+        C.resize(N * N, 0.0);
+        if (size == 1) cout << "Matrix size: " << N << "x" << N << endl;
     }
-    cout << "--------------------------------------------------------" << endl;
 
-    cout << "Запись результата 8-поточного вычисления в C.txt..." << endl;
-    writeMatrix("C.txt", C, N);
+    MPI_Bcast(&N, 1, MPI_INT, 0, MPI_COMM_WORLD);
 
+    if (N % size != 0) {
+        if (rank == 0) cerr << "Error: N (" << N << ") must be divisible by the number of processes (" << size << ")." << endl;
+        MPI_Finalize();
+        return 1;
+    }
+
+    int rows_per_proc = N / size;
+    int elements_per_proc = rows_per_proc * N;
+
+    vector<double> subA(elements_per_proc);
+    vector<double> subC(elements_per_proc, 0.0);
+    if (rank != 0) B.resize(N * N);
+
+    MPI_Barrier(MPI_COMM_WORLD);
+    double start_time = MPI_Wtime();
+
+    MPI_Scatter(A.data(), elements_per_proc, MPI_DOUBLE, subA.data(), elements_per_proc, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+    MPI_Bcast(B.data(), N * N, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+
+    for (int i = 0; i < rows_per_proc; ++i) {
+        for (int j = 0; j < N; ++j) {
+            double sum = 0.0;
+            for (int k = 0; k < N; ++k) {
+                sum += subA[i * N + k] * B[k * N + j];
+            }
+            subC[i * N + j] = sum;
+        }
+    }
+
+    MPI_Gather(subC.data(), elements_per_proc, MPI_DOUBLE, C.data(), elements_per_proc, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+
+    double end_time = MPI_Wtime();
+
+    if (rank == 0) {
+        cout << "Processes: " << size << " \t| Time: " << end_time - start_time << " sec" << endl;
+        writeMatrix("C.txt", C, N);
+    }
+
+    MPI_Finalize();
     return 0;
 }
