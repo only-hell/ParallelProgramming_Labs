@@ -1,9 +1,9 @@
 ﻿#include <iostream>
 #include <fstream>
 #include <vector>
-#include <omp.h> // Библиотека OpenMP
+#include <omp.h>
 #include <clocale>
-#include <iomanip> // Для красивого вывода
+#include <iomanip>
 
 using namespace std;
 
@@ -75,7 +75,6 @@ int main() {
                 C[i * N + j] = sum;
             }
         }
-        // ----------------------------
 
         double end_time = omp_get_wtime();
         double current_time = end_time - start_time;
