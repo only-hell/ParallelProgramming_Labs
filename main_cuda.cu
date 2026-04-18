@@ -1,32 +1,6 @@
-#include <iostream>
-#include <fstream>
-#include <vector>
+#include <stdio.h>
+#include <stdlib.h>
 #include <cuda_runtime.h>
-#include <device_launch_parameters.h>
-#include <windows.h>
-#include <iomanip>
-
-using namespace std;
-
-bool readMatrix(const string& filename, vector<double>& matrix, int& n) {
-    ifstream file(filename);
-    if (!file.is_open()) return false;
-    file >> n;
-    matrix.resize(n * n);
-    for (int i = 0; i < n * n; ++i) file >> matrix[i];
-    return true;
-}
-
-bool writeMatrix(const string& filename, const vector<double>& matrix, int n) {
-    ofstream file(filename);
-    if (!file.is_open()) return false;
-    file << n << "\n";
-    for (int i = 0; i < n; ++i) {
-        for (int j = 0; j < n; ++j) file << matrix[i * n + j] << " ";
-        file << "\n";
-    }
-    return true;
-}
 
 __global__ void matrixMulKernel(const double* A, const double* B, double* C, int N) {
     int row = blockIdx.y * blockDim.y + threadIdx.y;
@@ -40,65 +14,65 @@ __global__ void matrixMulKernel(const double* A, const double* B, double* C, int
     }
 }
 
-int main() {
-    SetConsoleOutputCP(1251);
-    SetConsoleCP(1251);
+int main(int argc, char* argv[]) {
+    int N = (argc > 1) ? atoi(argv[1]) : 800;
+    size_t total_elements = (size_t)N * N;
+    size_t size_bytes = total_elements * sizeof(double);
 
-    int nA, nB;
-    vector<double> h_A, h_B;
-    if (!readMatrix("A.txt", h_A, nA) || !readMatrix("B.txt", h_B, nB)) {
-        cerr << "Œ¯Ë·Í‡: —Ì‡˜‡Î‡ Ò„ÂÌÂËÛÈÚÂ Ï‡ÚËˆ˚ ÒÍËÔÚÓÏ Python!" << endl;
-        return 1;
+    double *h_A = (double*)malloc(size_bytes);
+    double *h_B = (double*)malloc(size_bytes);
+    double *h_C = (double*)malloc(size_bytes);
+
+    // –ß—Ç–µ–Ω–∏–µ —Ñ–∞–π–ª–æ–≤
+    FILE *fA = fopen("A.txt", "r");
+    FILE *fB = fopen("B.txt", "r");
+    if (!fA || !fB) { printf("–û—à–∏–±–∫–∞: —Ñ–∞–π–ª—ã A.txt –∏–ª–∏ B.txt –Ω–µ –Ω–∞–π–¥–µ–Ω—ã!\n"); return 1; }
+
+    int dummy;
+    fscanf(fA, "%d", &dummy); fscanf(fB, "%d", &dummy);
+    for (size_t i = 0; i < total_elements; i++) fscanf(fA, "%lf", &h_A[i]);
+    for (size_t i = 0; i < total_elements; i++) fscanf(fB, "%lf", &h_B[i]);
+    fclose(fA); fclose(fB);
+
+    double *d_A, *d_B, *d_C;
+    cudaMalloc(&d_A, size_bytes);
+    cudaMalloc(&d_B, size_bytes);
+    cudaMalloc(&d_C, size_bytes);
+
+    cudaMemcpy(d_A, h_A, size_bytes, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_B, h_B, size_bytes, cudaMemcpyHostToDevice);
+
+    // –°–µ—Ç–∫–∞ 32x32 (–æ–ø—Ç–∏–º–∞–ª—å–Ω–æ –¥–ª—è RTX 4050)
+    dim3 threads(32, 32);
+    dim3 blocks((N + 31) / 32, (N + 31) / 32);
+
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start); cudaEventCreate(&stop);
+    cudaEventRecord(start);
+
+    matrixMulKernel<<<blocks, threads>>>(d_A, d_B, d_C, N);
+
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+    float ms = 0;
+    cudaEventElapsedTime(&ms, start, stop);
+
+    printf("N=%d | RTX 4050 | Time: %.6f sec\n", N, ms / 1000.0);
+
+    // –ó–∞–±–∏—Ä–∞–µ–º —Ä–µ–∑—É–ª—å—Ç–∞—Ç –∏ –ø–∏—à–µ–º –≤ —Ñ–∞–π–ª –¥–ª—è –≤–µ—Ä–∏—Ñ–∏–∫–∞—Ü–∏–∏
+    cudaMemcpy(h_C, d_C, size_bytes, cudaMemcpyDeviceToHost);
+
+    FILE *fC = fopen("C.txt", "w");
+    if (fC) {
+        fprintf(fC, "%d\n", N);
+        for (size_t i = 0; i < total_elements; i++) {
+            fprintf(fC, "%.4f ", h_C[i]);
+            if ((i + 1) % N == 0) fprintf(fC, "\n");
+        }
+        fclose(fC);
     }
-    int N = nA;
-    vector<double> h_C(N * N, 0.0);
-    size_t size = N * N * sizeof(double);
-
-    double* d_A, * d_B, * d_C;
-    cudaMalloc(&d_A, size);
-    cudaMalloc(&d_B, size);
-    cudaMalloc(&d_C, size);
-
-    cudaMemcpy(d_A, h_A.data(), size, cudaMemcpyHostToDevice);
-    cudaMemcpy(d_B, h_B.data(), size, cudaMemcpyHostToDevice);
-
-    cout << "\nGPU: NVIDIA RTX 4050 | Ã‡ÚËˆ‡: " << N << "x" << N << endl;
-    cout << "¡ÎÓÍ\t| —ÂÚÍ‡\t\t| ¬ÂÏˇ (ÒÂÍ)" << endl;
-    cout << "---------------------------------------" << endl;
-
-    int block_sizes[] = { 8, 16, 32 };
-    for (int bs : block_sizes) {
-        dim3 threads(bs, bs);
-        dim3 blocks((N + bs - 1) / bs, (N + bs - 1) / bs);
-
-        // –‡ÁÓ„Â‚ GPU
-        matrixMulKernel << <blocks, threads >> > (d_A, d_B, d_C, N);
-        cudaDeviceSynchronize();
-
-        // «‡ÏÂ ‚ÂÏÂÌË
-        cudaEvent_t start, stop;
-        cudaEventCreate(&start);
-        cudaEventCreate(&stop);
-
-        cudaEventRecord(start);
-        matrixMulKernel << <blocks, threads >> > (d_A, d_B, d_C, N);
-        cudaEventRecord(stop);
-        cudaEventSynchronize(stop);
-
-        float ms = 0;
-        cudaEventElapsedTime(&ms, start, stop);
-        cout << bs << "x" << bs << "\t| "
-            << blocks.x << "x" << blocks.y << "\t| "
-            << fixed << setprecision(6) << ms / 1000.0 << " ÒÂÍ" << endl;
-
-        cudaEventDestroy(start);
-        cudaEventDestroy(stop);
-    }
-    cout << "---------------------------------------\n" << endl;
-
-    cudaMemcpy(h_C.data(), d_C, size, cudaMemcpyDeviceToHost);
-    writeMatrix("C.txt", h_C, N);
 
     cudaFree(d_A); cudaFree(d_B); cudaFree(d_C);
+    free(h_A); free(h_B); free(h_C);
     return 0;
 }
