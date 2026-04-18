@@ -11,7 +11,6 @@ plt.xlabel('Размер матрицы (N)', fontsize=12)
 plt.ylabel('Время выполнения (сек)', fontsize=12)
 plt.grid(True, linestyle='--', alpha=0.7)
 
-# Добавляем подписи значений над точками для наглядности
 for i, txt in enumerate(times):
     plt.annotate(f"{txt}s", (sizes[i], times[i]), textcoords="offset points", xytext=(0,10), ha='center')
 
